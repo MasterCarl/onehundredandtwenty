@@ -1,4 +1,4 @@
-const data = {
+{
     "Academic_Writing_for_Science_Fachspezifisches_Englisch_III_AAAAAAAAAAAAAN62XBOUKPTUHQ_3": {
         "kurz": "Academic Writing <br />Science ",
         "nameLV": "Academic Writing for Science (Fachspezifisches Englisch III)",
@@ -1707,7 +1707,7 @@ const data = {
             "ISAE",
             "SAMT"
         ],
-        "cp": 6,
+        "cp": 3,
         "benotet": true,
         "modul": [
             "ISAE-Spezialisierung",
