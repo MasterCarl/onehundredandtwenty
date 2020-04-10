@@ -1,232 +1,188 @@
 # -*- coding: utf-8 -*-
+from typing import Set, Union
 
-import urllib
-import sys
+import requests
 import json
 import re
 import codecs
+from lxml import html
 
 lehrformStrings = {
-    "PS"    : [u"Projekt", u"Seminar"],
-    "V"     : [u"Vorlesung"],
-    "S"     : [u"Seminar"],
-    "BS"    : [u"Seminar"],
-    "SP"    : [u"Seminar", u"Projekt"],
-    "VU"    : [u"Vorlesung", u"Übung"],
-    "VP"    : [u"Vorlesung", u"Projekt"],
-    "MP"    : False
-    #more?
+    "PS": [u"Projekt", u"Seminar"],
+    "V": [u"Vorlesung"],
+    "S": [u"Seminar"],
+    "BS": [u"Seminar"],
+    "SP": [u"Seminar", u"Projekt"],
+    "VU": [u"Vorlesung", u"Übung"],
+    "VP": [u"Vorlesung", u"Projekt"],
+    "MP": False
+    # more?
 }
 
-sskStrings = {
-    "Kommunikation"         : u"SSKKO",
-    "Schlüsselkompetenzen"  : u"SSKSK",
-    "Management"            : u"SSKMA",
-    "Recht"                 : u"SSKRE",
-    "Design Thinking"       : u"SSKDT"
-}
 
 vertiefungStrings = {
-    "Internet &amp; Security Technology"                            : u"IST",
-    "Software Architecture &amp; Modeling Technology"               : u"SAMT",
-    "Operating Systems &amp; Information Systems Technology"        : u"OSIS",
-    "Business Process &amp; Enterprise Technology"                  : u"BPET",
-    "Human Computer Interaction &amp; Computer Graphics Technology" : u"HCT"
+    "Internet &amp; Security Technology": u"IST",
+    "Software Architecture &amp; Modeling Technology": u"SAMT",
+    "Operating Systems &amp; Information Systems Technology": u"OSIS",
+    "Business Process &amp; Enterprise Technology": u"BPET",
+    "Human Computer Interaction &amp; Computer Graphics Technology": u"HCT"
 }
 
 itseStrings = {
-    "IT-Systems Engineering A" : u"ITSE",
-    "IT-Systems Engineering B" : u"ITSE",
-    "IT-Systems Engineering C" : u"ITSE",
-    "IT-Systems Engineering D" : u"ITSE"
+    "IT-Systems Engineering A": u"ITSE",
+    "IT-Systems Engineering B": u"ITSE",
+    "IT-Systems Engineering C": u"ITSE",
+    "IT-Systems Engineering D": u"ITSE"
 }
 
-def URLForSemester(semester):
+
+def semester_url(semester_name):
     # returns list of courses for semester
-    if semester == "now":
-        url = "http://hpi.de/studium/lehrveranstaltungen/it-systems-engineering.html"
+    if semester_name == "now":
+        return "https://hpi.de/studium/lehrveranstaltungen/it-systems-engineering-ma.html"
+
+    year = int(semester_name.lstrip("wWsS"))
+    assert year < 100, "You have been using this program far too long. Please start coding a new one."
+    year_string = f'{year:02}'
+    if semester_name.lower().startswith("ws"):
+        next_year_string = f'/{year + 1:02}' if year < 19 else str(year + 1)
     else:
-        year = int(semester.lstrip("wWsS"))
-        if year > 99:
-            print "You have been using this program far too long. Please start coding a new one."
-        else:
-            if semester.startswith("SS"):
-                url = "http://hpi.de/studium/lehrveranstaltungen/archiv/sommersemester-20" + (str(year) if year >= 10 else "0" + str(year)) + ".html"
-            else:
-                if (year < 9):
-                    url = "http://hpi.de/studium/lehrveranstaltungen/archiv/wintersemester-200" + str(year) + "0" + str(year+1) + ".html"
-                elif (year == 9):
-                    url = "http://hpi.de/studium/lehrveranstaltungen/archiv/wintersemester-200" + str(year) + str(year+1) + ".html"
-                else:
-                    url = "http://hpi.de/studium/lehrveranstaltungen/archiv/wintersemester-20" + str(year) + str(year+1) + ".html"
+        next_year_string = ""
+    semester_string = "sommersemester" if semester_name.lower().startswith("ss") else "wintersemester"
+    url = f"http://hpi.de/studium/lehrveranstaltungen/archiv/{semester_string}-20{year_string}{next_year_string}.html"
     return url
 
 
-def URLsPerSemester(url):
+def scrape_course_urls(overview_page_url):
     # return urls for courses
-    site = urllib.urlopen(url)
+    response = requests.get(overview_page_url)
 
-    for line in site:
-        if (line.strip().startswith("<h1>IT-Systems Engineering MA</h1>")):
-            break
-    pattern = re.compile(r"studium/lehrveranstaltungen/it\-systems\-engineering/lehrveranstaltung.*?\.html")
-    urls = []
-    for line in site:
-        if (line.strip().startswith('<a class="courselink" href="')):
-            urls += re.findall(pattern, line)
+    tree = html.fromstring(response.content)
+    itse_ma_table = tree.xpath('//h1[text() = "IT-Systems Engineering MA"]/following-sibling::table[1]')[0]
+    links = itse_ma_table.xpath('descendant::a[@class="courselink"]/@href')
 
-    return urls
-    
-def listOfLVs(urls):
+    return links
+
+
+def scrape_course_pages(urls):
     # returns dictionary of all courses
     lvs = {}
     i = 0
     for url in urls:
-        lvDict = parseLVPage("http://www.hpi.de/" + url)
-        if not (lvDict):
+        lvDict = scrape_course_page("http://www.hpi.de/" + url)
+        if not lvDict:
             continue
-        lvs[lvDict['nameLV']] = lvDict
-        i+=1
-        print "Bisher wurden " + str(i) + " LVs gefunden."
+        name = lvDict['nameLV']
+        lvs[name] = lvDict
+        print(f"{i}\t{name}")
+        i += 1
     return lvs
 
-def parseLVPage(url):
+
+def scrape_course_page(url):
     # returns dictionary containing information about the course
-    
-    page = urllib.urlopen(url)
-    for line in page:
-        if (line.strip().startswith('<div class="tx-ciuniversity-course">')): #kennzeichnet die entsprechenden Informationen
-            break
-    
-################################################################################
-##                                                                            ##
-##                    Detection of name and semester                          ##
-##                                                                            ##
-################################################################################
+    request = requests.get(url)
+    tree = html.fromstring(request.content)
 
-    line = page.next()
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection of name and semester                          ##
+    ##                                                                            ##
+    ################################################################################
 
-    headerPattern = re.compile("""w*(?<=\<h1\>)(.*?) \((Sommersemester) \d{2}(\d{2})|(Wintersemester) \d{2}(\d{2})/\d{2}(\d{2})\)(?=\<\/h1\>)""")
-    headerfind = re.search(headerPattern, line)
-    nameofLV = unicode(headerfind.group(1), encoding="utf-8")
-    
+
+    title = tree.xpath('//div[@class="tx-ciuniversity-course"]/h1/text()')[0]
+
+    headerPattern = re.compile(
+        """(.*?) \((?:(Sommersemester) \d{2}(\d{2})|(Wintersemester) \d{2}(\d{2})/\d{2}(\d{2}))\)""")
+    headerfind = re.search(headerPattern, title)
+    nameofLV = headerfind.group(1)
+
     if (headerfind.group(2) == "Sommersemester"):
         semester = "ss" + headerfind.group(3)
     else:
-        semester = "ws" + headerfind.group(3) + u"_" + headerfind.group(4)    
-   
-################################################################################
-##                                                                            ##
-##                    Detection of Dozents                                    ##
-##                                                                            ##
-################################################################################
+        assert headerfind.group(4) == "Wintersemester"
+        semester = "ws" + headerfind.group(5) + "/" + headerfind.group(6)
 
-    line = page.next()
-   
-    dozentenPattern = re.compile("""w*.*?\<i\>\<a.*?\>(.*?)\</a\>""")
-    dozents = []
-    while (line):
-        if (line.strip().startswith("<br />")):
-            break
-        else:
-            dozent = re.search(dozentenPattern, line)
-            if (dozent):
-                dozents.append(unicode(dozent.group(1), encoding="utf-8"))
-        line = page.next()
-    
-################################################################################
-##                                                                            ##
-##                    Detection of ECTS Points                                ##
-##                                                                            ##
-################################################################################
-    
-    line = page.next()
-    
-    ectsPattern = re.compile("""w*\<li\>ECTS.*?(\d*?)\</li\>""")
-    while (line):
-        if (line.strip().startswith("<li>ECTS")):
-            break
-        line = page.next()
-    ects = int(re.search(ectsPattern, line).group(1))
-        
-################################################################################
-##                                                                            ##
-##                    Detection if benotet or not                             ##
-##                                                                            ##
-################################################################################
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection of Dozents                                    ##
+    ##                                                                            ##
+    ################################################################################
 
-    begin = False
-    while (line):
-        if not (begin):
-            begin = line.strip().startswith("<li>Benotet")
-        elif (line.strip()):
-            benotet = (line.strip() == "Ja")
-            break
-        line = page.next()
+    lecturers = tree.xpath('//div[@class="tx-ciuniversity-course"]/i/a/text()')
+    lecturers = [x.strip() for x in lecturers if x[0] != '(' and not x.startswith("http")]
 
-################################################################################
-##                                                                            ##
-##                    Detection of Lehrform                                   ##
-##                                                                            ##
-################################################################################
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection of ECTS Points                                ##
+    ##                                                                            ##
+    ################################################################################
 
-    lehrformPattern = re.compile("""w*\<li\>Lehrform : (.*?)\</li\>""")
-    while (line):
-        lehrform = re.search(lehrformPattern, line)
-        if (lehrform):
-            lehrform = lehrformStrings[lehrform.group(1)]
-            break
-        line = page.next()
-    
-    if not (lehrform):
-        return # Masterprojects are not included
+    # line = next(page).decode('utf-8')
 
-################################################################################
-##                                                                            ##
-##                    Detection of Modules & Kennung                          ##
-##                                                                            ##
-################################################################################
+    course_general_info = tree.xpath('//*[@class="tx-ciuniversity-course-general-info"]')[0]
+    ects_text = course_general_info.xpath('li[2]/text()')[0]
 
-    modulpattern = re.compile("""w*\<li\>(.*?)\</li\>""")
-    begin = False
-    modules = []
-    while (line):
-        if not (begin):
-            begin = line.strip().startswith("<h2>Module</h2>")  # begin
-        elif (line.strip()):
-            module = re.search(modulpattern, line)
-            if (module):
-                modules.append(module.group(1))
-            elif (line.strip() == "</ul>"):                     # end
-                break
-        line = page.next()
-    
-    kennung = set()
-    modul = set()
+    ects = int(ects_text[len("ECTS: "):])
+
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection if benotet or not                             ##
+    ##                                                                            ##
+    ################################################################################
+
+    is_graded_text = course_general_info.xpath('li[3]/text()')[0][len('Benotet: '):].strip()
+    benotet = (is_graded_text == "Ja")
+    assert is_graded_text in ["Ja", "Nein"]
+
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection of Lehrform                                   ##
+    ##                                                                            ##
+    ################################################################################
+
+    lehrform = course_general_info.xpath('li[starts-with(text(), "Lehrform")]/text()')
+    if len(lehrform) == 0:
+        return  # Master's projects are not included
+    lehrform = lehrform[0][len('Lehrform: '):]
+
+    ################################################################################
+    ##                                                                            ##
+    ##                    Detection of Modules & Kennung                          ##
+    ##                                                                            ##
+    ################################################################################
+
+    ssks = (
+        "Recht und Wirtschaft",
+        "Kommunikation",
+        "Design Thinking Advanced",
+        "Design Thinking Basic",
+        "Management und Leitung",
+    )
+    modules = tree.xpath(
+        '//*[contains(@class, "tx_dscclipclap") and starts-with(normalize-space(), "IT-Systems Engineering MA")]'
+        '/ul/li/text()')  # e.g. ISAE-Konzepte und Methoden
+
+    module_groups: Set[Union[str, str]] = set()  # e.g. BPET, OSIS
     for module in modules:
-        if (sskStrings.get(module)):
-            kennung.add(sskStrings.get(module))
-            modul.add("Softskills")
-        elif (vertiefungStrings.get(module)):
-            kennung.add(vertiefungStrings.get(module))
-            modul.add("Vertiefungsgebiet")
-        elif (itseStrings.get(module)):
-            kennung.add(itseStrings.get(module))
-            modul.add("IT-Systems Engineering")
-    modul = list(modul)
-    kennung = list(kennung)
+        if module in ssks:
+            module_groups.add("SSK")
+        else:
+            abbreviation = module[:4].upper()
+            module_groups.add(abbreviation)
 
-################################################################################
-##                                                                            ##
-##                    Try to find good kurz                                   ##
-##                                                                            ##
-################################################################################
+    ################################################################################
+    ##                                                                            ##
+    ##                    Try to find good kurz                                   ##
+    ##                                                                            ##
+    ################################################################################
 
     maxLineLength = 20
     relevantWords = [x[:maxLineLength] for x in nameofLV.split(" ") if len(x) > 3 or x.upper() == x]
     kurz = ""
     i = 0
-    while(i < 2):
+    while (i < 2):
         charCount = 0
         while (len(relevantWords) > 0):
             kurzWort = relevantWords.pop(0)
@@ -234,30 +190,32 @@ def parseLVPage(url):
                 charCount += len(kurzWort)
                 kurz += kurzWort + " "
             else:
-                if(i == 0):
+                if (i == 0):
                     relevantWords = [kurzWort] + relevantWords
                     kurz += "<br />"
                 break
-        i += 1    
+        i += 1
 
     # create dictionary for json serialization
     lv = {}
     lv['kurz'] = kurz
     lv['nameLV'] = nameofLV
     lv['semester'] = semester
-    lv['dozent'] = dozents
-    lv['kennung'] = kennung
+    lv['dozent'] = lecturers
+    # lv['kennung'] = kennung
+    lv['modulgruppen'] = list(module_groups)
     lv['cp'] = ects
     lv['benotet'] = benotet
-    lv['modul'] = modul
+    lv['modul'] = modules
     lv['lehrform'] = lehrform
     return lv
 
-semester = raw_input("Please input the wanted semester: now OR (SS|WS)[0-9]{2}: ")
-place = raw_input("Please input the name of the local file that the JSON dump should be written to: ")
-dumpfile = codecs.open("./" + place, "w", encoding='utf-8')
 
-lvs = listOfLVs(URLsPerSemester(URLForSemester(semester)))
-dumpfile.write(json.dumps(lvs, ensure_ascii=False, indent=4))
+semester = input("Please input the wanted semester: now OR (SS|WS)[0-9]{2}: ")
 
-dumpfile.close()
+lvs = scrape_course_pages(scrape_course_urls(semester_url(semester)))
+actual_semester = next(iter(lvs.values()))['semester']
+path = "./" + actual_semester + ".json"
+with codecs.open(path, "w", encoding='utf-8') as f:
+    f.write(json.dumps(lvs, ensure_ascii=False, indent=4))
+print(f'\nWrote to {path}')
